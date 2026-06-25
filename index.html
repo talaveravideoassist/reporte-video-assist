@@ -118,13 +118,25 @@
     .pclip h4{margin:0 0 3px; font-size:13px;}
     .pclip .meta{font-size:11px; color:#333;}
     .proll{font-size:15px; font-weight:bold; margin-top:14px; border-bottom:2px solid #000; padding-bottom:3px;}
-    .pescena{font-size:13px; font-weight:bold; margin:10px 0 2px 8px;}
-    .pplano{font-size:12px; font-weight:bold; margin:6px 0 2px 12px; color:#333;}
+    .pescena{margin:10px 0 2px 8px;}
+    .pescena-title{font-size:13px; font-weight:bold;}
+    .pescena-desc{font-size:11px; font-weight:normal; color:#555; margin:2px 0 0 2px;}
+    .pplano{margin:6px 0 2px 12px; color:#333;}
+    .pplano-title{font-size:12px; font-weight:bold; color:#111;}
+    .pplano-desc{font-size:11px; font-weight:normal; color:#444; margin:2px 0;}
+    .pplano-tech{font-size:10.5px; font-weight:normal; color:#555; margin-top:3px; line-height:1.5;}
+    .pplano-tech b{font-weight:700; color:#181818;}
     .pheader h1{font-size:18px; margin:0 0 4px;}
     .pheader p{font-size:12px; margin:1px 0; color:#333;}
     .pstats{display:flex; gap:14px; font-size:12px; margin:10px 0 16px; font-weight:bold; flex-wrap:wrap;}
     .pdisclaimer{font-size:10px; color:#555; font-style:italic; border:1px solid #999; padding:8px; border-radius:6px; margin:10px 0;}
-    .ppriority{font-size:9px; color:#777; font-style:italic; margin-top:6px;}
+    .ppriority{font-size:10px; margin-top:6px; color:#333;}
+    .ppriority b{font-weight:700;}
+    .pfooter{margin-top:26px; padding-top:14px; border-top:2px solid #0540ed; text-align:center;}
+    .pfooter-slogan{font-weight:800; font-size:12px; color:#0540ed; letter-spacing:.3px; line-height:1.4;}
+    .pfooter-tagline{font-size:11px; color:#333; margin-top:5px;}
+    .pfooter-tagline b{color:#0540ed;}
+    .pfooter-contact{font-size:10px; color:#555; margin-top:10px; line-height:1.6;}
     .ptech{font-size:11px; color:#333; margin:4px 0 10px;}
   }
   #reportPrintArea{display:none;}
@@ -859,41 +871,83 @@ function autoDecimals(el, decimals){
   if(v.includes('.')) return; // ya tiene decimales, no lo tocamos
   el.value = v + '.' + '0'.repeat(decimals);
 }
+function getUltimoPlano(){
+  if(!state.planos.length) return null;
+  return [...state.planos].sort((a,b)=>(b.createdAt||0)-(a.createdAt||0))[0];
+}
+// ---------- SELECTOR CON OPCIONES + VALOR PERSONALIZADO ----------
+const PRESETS = {
+  resolucion: ['1920 x 1080 (FHD)','2048 x 1080 (2K DCI)','3840 x 2160 (4K UHD)','4096 x 2160 (4K DCI)','6144 x 3240 (6K)','7680 x 4320 (8K)'],
+  aspectRatio: ['16:9','1.85:1','2.39:1','2.35:1','4:3','1:1','9:16'],
+  shutter: ['1/24','1/25','1/48','1/50','1/60','1/96','1/100','180.0','90.0'],
+  iso: ['100','200','400','800','1600','3200','6400'],
+  wb: ['3200K','4300K','5600K','6500K'],
+  fps: ['23.976','24.000','25.000','29.97','30.000','48.000','50.000','60.000','120.000'],
+  diafragma: ['f/1.4','f/2','f/2.8','f/4','f/5.6','f/8','f/11','f/16'],
+};
+function renderPicker(id, label, options, current, placeholder, extraAttrs){
+  const match = options.includes(current);
+  return `<div class="field">
+    <label>${label}</label>
+    <select id="${id}_sel" onchange="onPickerChange('${id}')">
+      <option value="" ${!current?'selected':''}>Seleccionar...</option>
+      ${options.map(o=>`<option value="${o}" ${current===o?'selected':''}>${o}</option>`).join('')}
+      <option value="__custom__" ${(!match && current)?'selected':''}>✏️ Otro (escribir)</option>
+    </select>
+    <input id="${id}" value="${current||''}" ${extraAttrs||''} style="margin-top:6px; ${(match || !current) ? 'display:none;':''}" placeholder="${placeholder||'Escribe el valor'}">
+  </div>`;
+}
+function onPickerChange(id){
+  const sel = document.getElementById(id+'_sel');
+  const inp = document.getElementById(id);
+  if(sel.value === '__custom__'){
+    inp.style.display = 'block';
+    inp.value = '';
+    inp.focus();
+  } else {
+    inp.style.display = 'none';
+    inp.value = sel.value;
+  }
+}
+
 function openPlanoModal(escenaId, id){
   const pl = id? getPlano(id): null;
+  const prev = (!pl) ? getUltimoPlano() : null; // solo autocompleta en planos NUEVOS
+  const v = (field, fallback)=> pl ? (pl[field]||'') : (prev ? (prev[field]||fallback||'') : (fallback||''));
   document.getElementById('modalContent').innerHTML = `
     <span class="close-x" onclick="closeModal()">✕</span>
     <h2>${pl?'Editar':'Nuevo'} plano</h2>
+    ${prev? `<p class="small-note" style="color:var(--accent)">✨ Prellenado con los datos técnicos del último plano — revisa y ajusta lo que cambie.</p>`:''}
     <input type="hidden" id="m_id" value="${pl?pl.id:''}">
     <input type="hidden" id="m_escenaId" value="${escenaId}">
     <div class="grid">
       <div class="field"><label>Número de plano</label><input id="m_numero" value="${pl?pl.numero:''}" placeholder="Ej. 01"></div>
       <div class="field"><label>Interior / Exterior</label>
-        <select id="m_intext"><option ${pl&&pl.intExt==='Interior'?'selected':''}>Interior</option><option ${pl&&pl.intExt==='Exterior'?'selected':''}>Exterior</option></select>
+        <select id="m_intext"><option ${v('intExt')==='Interior'?'selected':''}>Interior</option><option ${v('intExt')==='Exterior'?'selected':''}>Exterior</option></select>
       </div>
     </div>
     <div class="field"><label>Descripción del plano</label><textarea id="m_descripcion">${pl?pl.descripcion||'':''}</textarea></div>
     <div class="grid">
       <div class="field"><label>Día / Noche</label>
-        <select id="m_dianoche"><option ${pl&&pl.diaNoche==='Día'?'selected':''}>Día</option><option ${pl&&pl.diaNoche==='Noche'?'selected':''}>Noche</option></select>
+        <select id="m_dianoche"><option ${v('diaNoche')==='Día'?'selected':''}>Día</option><option ${v('diaNoche')==='Noche'?'selected':''}>Noche</option></select>
       </div>
-      <div class="field"><label>Óptica</label><input id="m_optica" value="${pl?pl.optica||'':''}" placeholder="Ej. 25" onblur="autoSuffix(this,'mm')"></div>
+      <div class="field"><label>Óptica</label><input id="m_optica" value="${v('optica')}" placeholder="Ej. 25" onblur="autoSuffix(this,'mm')"></div>
     </div>
     <div class="grid">
-      <div class="field"><label>Diafragma</label><input id="m_diafragma" value="${pl?pl.diafragma||'':''}" placeholder="Ej. f/2.8"></div>
-      <div class="field"><label>White Balance</label><input id="m_wb" value="${pl?pl.wb||'':''}" placeholder="Ej. 5600K"></div>
+      ${renderPicker('m_diafragma','Diafragma', PRESETS.diafragma, v('diafragma'), 'Ej. f/2.8')}
+      ${renderPicker('m_wb','White Balance', PRESETS.wb, v('wb'), 'Ej. 5600K')}
     </div>
     <div class="grid">
-      <div class="field"><label>ISO / EI</label><input id="m_iso" value="${pl?pl.iso||'':''}"></div>
-      <div class="field"><label>FPS</label><input id="m_fps" value="${pl?pl.fps||'':''}" placeholder="Ej. 24" onblur="autoDecimals(this,3)"></div>
+      ${renderPicker('m_iso','ISO / EI', PRESETS.iso, v('iso'), 'Ej. 500')}
+      ${renderPicker('m_fps','FPS', PRESETS.fps, v('fps'), 'Ej. 24.000', `onblur="autoDecimals(this,3)"`)}
     </div>
     <div class="grid">
-      <div class="field"><label>Shutter</label><input id="m_shutter" value="${pl?pl.shutter||'':''}" placeholder="Ej. 180" onblur="autoDecimals(this,1)"></div>
-      <div class="field"><label>Resolución</label><input id="m_resolucion" value="${pl?pl.resolucion||'':''}"></div>
+      ${renderPicker('m_shutter','Shutter', PRESETS.shutter, v('shutter'), 'Ej. 180.0', `onblur="autoDecimals(this,1)"`)}
+      ${renderPicker('m_resolucion','Resolución', PRESETS.resolucion, v('resolucion'), 'Ej. 1280 x 720')}
     </div>
     <div class="grid">
-      <div class="field"><label>Aspect Ratio</label><input id="m_aspect" value="${pl?pl.aspectRatio||'':''}" placeholder="Ej. 16:9"></div>
-      <div class="field"><label>Filtros</label><input id="m_filtros" value="${pl?pl.filtros||'':''}" placeholder="Ej. ND 0.9, Polarizador"></div>
+      ${renderPicker('m_aspect','Aspect Ratio', PRESETS.aspectRatio, v('aspectRatio'), 'Ej. 2:1')}
+      <div class="field"><label>Filtros</label><input id="m_filtros" value="${v('filtros')}" placeholder="Ej. ND 0.9, Polarizador"></div>
     </div>
     <div class="field"><label>Observaciones</label><textarea id="m_observaciones">${pl?pl.observaciones||'':''}</textarea></div>
 
@@ -943,9 +997,12 @@ function handleFotoPlano(event){
   reader.readAsDataURL(file);
 }
 function quitarFotoPlano(){
-  tempImagenPlano = null;
-  const wrap = document.getElementById('fotoPreviewWrap');
-  if(wrap) wrap.innerHTML = `<div style="font-size:12px;color:var(--muted)">Sin foto adjunta</div>`;
+  if(!tempImagenPlano) return;
+  customConfirm('¿Quitar la foto de referencia de este plano?', ()=>{
+    tempImagenPlano = null;
+    const wrap = document.getElementById('fotoPreviewWrap');
+    if(wrap) wrap.innerHTML = `<div style="font-size:12px;color:var(--muted)">Sin foto adjunta</div>`;
+  }, true);
 }
 function savePlano(){
   const numero = document.getElementById('m_numero').value.trim();
@@ -1189,7 +1246,12 @@ function exportProjectPDF(projectId){
   let totalClips=0;
   const camHtml = (p.camaras||[]).map(c=>`${c.nombre}: ${c.camMarcaModelo||'-'} ${c.opticaMarcaModelo? '| Óptica: '+c.opticaMarcaModelo:''}`).join('<br>');
   const f = p.formato||{};
-  const legendHtml = `<div class="ppriority">PRIORIDAD PARA EDICIÓN: Circle Take: Máxima | Use: Alta | Alt Take: Media | Hold: Baja | No Good: Descartada.</div>`;
+  const legendHtml = `<div class="ppriority"><b>PRIORIDAD PARA EDICIÓN:</b>
+    <span style="color:#a8821f;">⭐ Circle Take: Máxima</span> |
+    <span style="color:#1f9d57;">Use: Alta</span> |
+    <span style="color:#b8a514;">Alt Take: Media</span> |
+    <span style="color:#e07a1f;">Hold: Baja</span> |
+    <span style="color:#d6453f;">No Good: Descartada</span>.</div>`;
   let html = `<div class="pheader">
     <img src="${LOGO_AZUL}" alt="${state.branding.title}" style="height:34px; width:auto; margin-bottom:14px; display:block;">
     <h1>${p.nombre}</h1>
@@ -1209,14 +1271,19 @@ function exportProjectPDF(projectId){
   rolls.forEach(r=>{
     html += `<div class="pblock"><div class="proll">🎞️ ROLL ${r.nombre}</div>`;
     escenasOf(r.id).forEach(e=>{
-      html += `<div class="pescena">📌 ${e.nombre} ${e.locacion? '· '+e.locacion:''} ${e.descripcion? '— '+e.descripcion:''}</div>`;
+      html += `<div class="pescena">
+        <div class="pescena-title">📌 ${e.nombre} ${e.locacion? '· '+e.locacion:''}</div>
+        ${e.descripcion? `<div class="pescena-desc">${e.descripcion}</div>`:''}
+      </div>`;
       planosOf(e.id).forEach(pl=>{
         html += `<div class="pplano" style="display:flex; gap:8px; align-items:flex-start;">
           ${pl.imagen? `<img src="${pl.imagen}" style="width:90px; height:50px; object-fit:cover; border-radius:6px; border:1px solid #999; flex-shrink:0;">` : ''}
-          <div>▸ Plano ${pl.numero} — ${pl.intExt||'-'}, ${pl.diaNoche||'-'}<br>
-          Óptica: ${pl.optica||'-'} | Diafragma: ${pl.diafragma||'-'} | WB: ${pl.wb||'-'} | ISO/EI: ${pl.iso||'-'} | FPS: ${pl.fps||'-'} | Shutter: ${pl.shutter||'-'} | Resolución: ${pl.resolucion||'-'} | Aspect Ratio: ${pl.aspectRatio||'-'}
-          ${pl.filtros? '<br>Filtros: '+pl.filtros : ''}
-          ${pl.observaciones? '<br>Observaciones: '+pl.observaciones : ''}
+          <div>
+            <div class="pplano-title">▸ Plano ${pl.numero} — ${pl.intExt||'-'}, ${pl.diaNoche||'-'}</div>
+            ${pl.descripcion? `<div class="pplano-desc">${pl.descripcion}</div>`:''}
+            <div class="pplano-tech"><b>Óptica:</b> ${pl.optica||'-'} &nbsp;<b>Diafragma:</b> ${pl.diafragma||'-'} &nbsp;<b>WB:</b> ${pl.wb||'-'} &nbsp;<b>ISO/EI:</b> ${pl.iso||'-'} &nbsp;<b>FPS:</b> ${pl.fps||'-'} &nbsp;<b>Shutter:</b> ${pl.shutter||'-'} &nbsp;<b>Resolución:</b> ${pl.resolucion||'-'} &nbsp;<b>Aspect Ratio:</b> ${pl.aspectRatio||'-'}</div>
+            ${pl.filtros? `<div class="pplano-tech"><b>Filtros:</b> ${pl.filtros}</div>`:''}
+            ${pl.observaciones? `<div class="pplano-tech"><b>Observaciones:</b> ${pl.observaciones}</div>`:''}
           </div>
         </div>`;
         clipsOf(pl.id).forEach(c=>{
@@ -1236,7 +1303,14 @@ function exportProjectPDF(projectId){
     html += `</div>`;
   });
 
-  html = html.replace('<div id="statsPlaceholder"></div>', `<div class="pstats"><span>Total clips: ${totalClips}</span></div>`);
+  html = html.replace('<div id="statsPlaceholder"></div>', `<div class="pstats"><span>Total de clips filtrados: ${totalClips}</span></div>`);
+
+  html += `<div class="pfooter">
+    <div class="pfooter-slogan">LA INDUSTRIA AUDIOVISUAL EVOLUCIONA, NUESTRO VIDEO ASSIST TAMBIÉN.</div>
+    <div class="pfooter-tagline">Cada mirada cuenta. <b>+PROFESIONAL</b></div>
+    <div class="pfooter-contact">📞 +51 999 929 867 &nbsp;|&nbsp; ✉️ talavera.videoassist@gmail.com &nbsp;|&nbsp; 📷 @talavera.videoassist</div>
+  </div>`;
+
   document.getElementById('reportPrintArea').innerHTML = html;
   setTimeout(()=>{
     try{
