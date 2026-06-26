@@ -169,6 +169,7 @@ function load(){
   const raw = localStorage.getItem(STORAGE_KEY);
   if(raw){ try{ state = JSON.parse(raw); }catch(e){} }
   ['projects','rolls','escenas','planos','clips','customTags'].forEach(k=>{ if(!state[k]) state[k]=[]; });
+  if(!state.customPresets) state.customPresets = {};
   if(!state.branding) state.branding = {title:'TALAVERA', subtitle:'VIDEO ASSIST SERVICE PROFESIONAL', desc:''};
 }
 function save(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
@@ -574,10 +575,12 @@ function renderCamList(){
       <div class="cam-head"><b>${c.nombre||('Cámara '+String.fromCharCode(65+i))}</b><span class="remove-cam" onclick="removeCamBlock(${i})">Eliminar</span></div>
       <div class="grid">
         <div class="field"><label>Nombre</label><input value="${c.nombre||''}" onchange="tempCams[${i}].nombre=this.value; renderCamList()"></div>
-        <div class="field"><label>Marca y modelo de cámara</label><input value="${c.camMarcaModelo||''}" placeholder="Ej. Sony FX6" onchange="tempCams[${i}].camMarcaModelo=this.value"></div>
+        <div class="field"><label>Marca y modelo de cámara</label><input value="${c.camMarcaModelo||''}" list="camarasSugeridas" placeholder="Ej. ARRI Alexa 35" onchange="tempCams[${i}].camMarcaModelo=this.value"></div>
       </div>
-      <div class="field"><label>Marca y modelo de óptica</label><input value="${c.opticaMarcaModelo||''}" placeholder="Ej. Canon CN-E 35mm" onchange="tempCams[${i}].opticaMarcaModelo=this.value"></div>
-    </div>`).join('');
+      <div class="field"><label>Marca y modelo de óptica</label><input value="${c.opticaMarcaModelo||''}" list="opticasSugeridas" placeholder="Ej. ARRI Signature Prime" onchange="tempCams[${i}].opticaMarcaModelo=this.value"></div>
+    </div>`).join('') + `
+    <datalist id="camarasSugeridas">${CAMARAS_SUGERIDAS.map(c=>`<option value="${c}">`).join('')}</datalist>
+    <datalist id="opticasSugeridas">${OPTICAS_SUGERIDAS.map(o=>`<option value="${o}">`).join('')}</datalist>`;
 }
 function addCamBlock(){
   tempCams.push({ nombre:'Cámara '+String.fromCharCode(65+tempCams.length), camMarcaModelo:'', opticaMarcaModelo:'' });
@@ -858,6 +861,31 @@ function renderEscena(){
 }
 
 // Helpers de formato automático para campos técnicos
+function autoFormatDuracion(el){
+  let v = el.value.trim();
+  if(!v) return;
+  // Si ya viene en formato completo HH:MM:SS, no tocar
+  if(/^\d{1,2}:\d{2}:\d{2}$/.test(v)){
+    const [hh,mm,ss] = v.split(':').map(n=>n.padStart(2,'0'));
+    el.value = `${hh}:${mm}:${ss}`;
+    return;
+  }
+  let totalSeconds = 0;
+  if(/^\d+$/.test(v)){
+    // Solo número -> segundos puros
+    totalSeconds = parseInt(v,10);
+  } else if(/^\d{1,2}:\d{1,2}$/.test(v)){
+    // mm:ss
+    const [mm, ss] = v.split(':').map(n=>parseInt(n,10));
+    totalSeconds = mm*60 + ss;
+  } else {
+    return; // formato no reconocido, no tocar (ej. ya tiene texto raro)
+  }
+  const hh = Math.floor(totalSeconds/3600);
+  const mm = Math.floor((totalSeconds%3600)/60);
+  const ss = totalSeconds%60;
+  el.value = `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}:${String(ss).padStart(2,'0')}`;
+}
 function autoSuffix(el, suffix){
   let v = el.value.trim();
   if(!v) return;
@@ -879,12 +907,40 @@ function getUltimoPlano(){
 const PRESETS = {
   resolucion: ['1920 x 1080 (FHD)','2048 x 1080 (2K DCI)','3840 x 2160 (4K UHD)','4096 x 2160 (4K DCI)','6144 x 3240 (6K)','7680 x 4320 (8K)'],
   aspectRatio: ['16:9','1.85:1','2.39:1','2.35:1','4:3','1:1','9:16'],
-  shutter: ['1/24','1/25','1/48','1/50','1/60','1/96','1/100','180.0','90.0'],
+  shutter: ['1/24','1/25','1/48','1/50','1/60','1/96','1/100','180.0','172.8','144.0','96.0','90.0','45.0'],
   iso: ['100','200','400','800','1600','3200','6400'],
   wb: ['3200K','4300K','5600K','6500K'],
   fps: ['23.976','24.000','25.000','29.97','30.000','48.000','50.000','60.000','120.000'],
-  diafragma: ['f/1.4','f/2','f/2.8','f/4','f/5.6','f/8','f/11','f/16'],
+  diafragma: ['f/1.4','f/2','f/2.8','f/4','f/5.6','f/8','f/11','f/16','T1.3','T1.4','T2.0','T2.8','T4.0','T5.6','T8.0','T11','T16'],
 };
+const CAMARAS_SUGERIDAS = [
+  'ARRI Alexa 35','ARRI Alexa Mini','ARRI Alexa Mini LF','ARRI Alexa LF','ARRI Amira',
+  'Sony Venice 2','Sony Venice','Sony FX9','Sony FX6','Sony FX3',
+  'RED V-Raptor','RED Komodo','RED Komodo-X',
+  'Canon C300 Mark III','Canon C500 Mark II','Canon C70',
+  'Blackmagic URSA Mini Pro 12K','Blackmagic Pocket Cinema Camera 6K'
+];
+const OPTICAS_SUGERIDAS = [
+  'ARRI Signature Prime','Zeiss Supreme Prime','Zeiss CP.3','Cooke S4/i','Cooke Anamorphic/i',
+  'Canon CN-E','Sigma Cine','Angenieux Optimo','Leica Summilux-C','Laowa'
+];
+// ---------- MEMORIA DE VALORES PERSONALIZADOS ----------
+function getOptions(key){
+  const custom = (state.customPresets && state.customPresets[key]) || [];
+  return [...PRESETS[key], ...custom];
+}
+function learnCustomValue(key, value){
+  if(!value) return;
+  value = value.trim();
+  if(!value) return;
+  if(!state.customPresets) state.customPresets = {};
+  if(!state.customPresets[key]) state.customPresets[key] = [];
+  const all = [...PRESETS[key], ...state.customPresets[key]];
+  if(!all.includes(value)){
+    state.customPresets[key].push(value);
+    save();
+  }
+}
 function renderPicker(id, label, options, current, placeholder, extraAttrs){
   const match = options.includes(current);
   return `<div class="field">
@@ -934,21 +990,26 @@ function openPlanoModal(escenaId, id){
       <div class="field"><label>Óptica</label><input id="m_optica" value="${v('optica')}" placeholder="Ej. 25" onblur="autoSuffix(this,'mm')"></div>
     </div>
     <div class="grid">
-      ${renderPicker('m_diafragma','Diafragma', PRESETS.diafragma, v('diafragma'), 'Ej. f/2.8')}
-      ${renderPicker('m_wb','White Balance', PRESETS.wb, v('wb'), 'Ej. 5600K')}
+      ${renderPicker('m_diafragma','Diafragma', getOptions('diafragma'), v('diafragma'), 'Ej. f/2.8')}
+      ${renderPicker('m_wb','White Balance', getOptions('wb'), v('wb'), 'Ej. 5600K')}
     </div>
     <div class="grid">
-      ${renderPicker('m_iso','ISO / EI', PRESETS.iso, v('iso'), 'Ej. 500')}
-      ${renderPicker('m_fps','FPS', PRESETS.fps, v('fps'), 'Ej. 24.000', `onblur="autoDecimals(this,3)"`)}
+      ${renderPicker('m_iso','ISO / EI', getOptions('iso'), v('iso'), 'Ej. 500')}
+      ${renderPicker('m_fps','FPS', getOptions('fps'), v('fps'), 'Ej. 24.000', `onblur="autoDecimals(this,3)"`)}
     </div>
     <div class="grid">
-      ${renderPicker('m_shutter','Shutter', PRESETS.shutter, v('shutter'), 'Ej. 180.0', `onblur="autoDecimals(this,1)"`)}
-      ${renderPicker('m_resolucion','Resolución', PRESETS.resolucion, v('resolucion'), 'Ej. 1280 x 720')}
+      ${renderPicker('m_shutter','Shutter', getOptions('shutter'), v('shutter'), 'Ej. 180.0', `onblur="autoDecimals(this,1)"`)}
+      ${renderPicker('m_resolucion','Resolución', getOptions('resolucion'), v('resolucion'), 'Ej. 1280 x 720')}
     </div>
-    <div class="grid">
-      ${renderPicker('m_aspect','Aspect Ratio', PRESETS.aspectRatio, v('aspectRatio'), 'Ej. 2:1')}
-      <div class="field"><label>Filtros</label><input id="m_filtros" value="${v('filtros')}" placeholder="Ej. ND 0.9, Polarizador"></div>
+    <div class="field">
+      <label>Aspect Ratio (puedes elegir más de uno)</label>
+      <div class="tag-grid" id="aspectGrid"></div>
+      <div class="row-actions">
+        <input id="newAspectInput" placeholder="Agregar otro (ej. 2:1)..." style="flex:2">
+        <button class="btn-secondary" style="flex:1" onclick="addCustomAspect()">+ Agregar</button>
+      </div>
     </div>
+    <div class="field"><label>Filtros</label><input id="m_filtros" value="${v('filtros')}" placeholder="Ej. ND 0.9, Polarizador"></div>
     <div class="field"><label>Observaciones</label><textarea id="m_observaciones">${pl?pl.observaciones||'':''}</textarea></div>
 
     <div class="section-title">Foto de referencia (opcional)</div>
@@ -968,9 +1029,33 @@ function openPlanoModal(escenaId, id){
       <button class="btn-primary" onclick="savePlano()">Guardar</button>
     </div>`;
   tempImagenPlano = pl && pl.imagen ? pl.imagen : null;
+  const aspectCurrent = v('aspectRatio');
+  tempAspectRatios = aspectCurrent ? aspectCurrent.split(',').map(s=>s.trim()).filter(Boolean) : [];
+  renderAspectGrid();
   openModal();
 }
 let tempImagenPlano = null;
+let tempAspectRatios = [];
+function renderAspectGrid(){
+  const wrap = document.getElementById('aspectGrid');
+  if(!wrap) return;
+  const all = getOptions('aspectRatio');
+  wrap.innerHTML = all.map(o=>`<div class="tag-chip ${tempAspectRatios.includes(o)?'sel':''}" onclick="toggleAspect('${o}')">${o}</div>`).join('');
+}
+function toggleAspect(o){
+  if(tempAspectRatios.includes(o)) tempAspectRatios = tempAspectRatios.filter(x=>x!==o);
+  else tempAspectRatios.push(o);
+  renderAspectGrid();
+}
+function addCustomAspect(){
+  const input = document.getElementById('newAspectInput');
+  const val = input.value.trim();
+  if(!val) return;
+  learnCustomValue('aspectRatio', val);
+  if(!tempAspectRatios.includes(val)) tempAspectRatios.push(val);
+  input.value='';
+  renderAspectGrid();
+}
 function handleFotoPlano(event){
   const file = event.target.files[0];
   if(!file) return;
@@ -1009,18 +1094,31 @@ function savePlano(){
   if(!numero){ toast('⚠️ Ingresa el número de plano'); return; }
   const id = document.getElementById('m_id').value || uid('plano');
   const existing = getPlano(id);
+  const diafragmaVal = document.getElementById('m_diafragma').value;
+  const wbVal = document.getElementById('m_wb').value;
+  const isoVal = document.getElementById('m_iso').value;
+  const fpsVal = document.getElementById('m_fps').value;
+  const shutterVal = document.getElementById('m_shutter').value;
+  const resolucionVal = document.getElementById('m_resolucion').value;
+  // Aprender valores nuevos escritos manualmente ("Otro") para futuras veces
+  learnCustomValue('diafragma', diafragmaVal);
+  learnCustomValue('wb', wbVal);
+  learnCustomValue('iso', isoVal);
+  learnCustomValue('fps', fpsVal);
+  learnCustomValue('shutter', shutterVal);
+  learnCustomValue('resolucion', resolucionVal);
   const obj = { id, escenaId: document.getElementById('m_escenaId').value, numero,
     intExt: document.getElementById('m_intext').value,
     descripcion: document.getElementById('m_descripcion').value,
     diaNoche: document.getElementById('m_dianoche').value,
     optica: document.getElementById('m_optica').value,
-    diafragma: document.getElementById('m_diafragma').value,
-    wb: document.getElementById('m_wb').value,
-    iso: document.getElementById('m_iso').value,
-    fps: document.getElementById('m_fps').value,
-    shutter: document.getElementById('m_shutter').value,
-    resolucion: document.getElementById('m_resolucion').value,
-    aspectRatio: document.getElementById('m_aspect').value,
+    diafragma: diafragmaVal,
+    wb: wbVal,
+    iso: isoVal,
+    fps: fpsVal,
+    shutter: shutterVal,
+    resolucion: resolucionVal,
+    aspectRatio: tempAspectRatios.join(', '),
     filtros: document.getElementById('m_filtros').value,
     observaciones: document.getElementById('m_observaciones').value,
     imagen: tempImagenPlano,
@@ -1107,7 +1205,7 @@ function openClipModal(planoId, id){
       <div class="field"><label>Número de clip</label><input id="c_numero" value="${c?c.numero||'':''}" placeholder="Ej. C001"></div>
       <div class="field"><label>Toma(s)</label><input id="c_tomas" value="${c?c.tomas||'':''}" placeholder="Ej. 2, 4"></div>
     </div>
-    <div class="field"><label>Duración</label><input id="c_duracion" value="${c?c.duracion||'':''}" placeholder="Ej. 00:14"></div>
+    <div class="field"><label>Duración</label><input id="c_duracion" value="${c?c.duracion||'':''}" placeholder="Ej. 16 o 1:14" onblur="autoFormatDuracion(this)"></div>
     <div class="field"><label>Estado</label><div class="tag-grid" id="estadoGrid"></div></div>
     <div class="field"><label>Special Tags</label>
       <div class="tag-grid" id="tagGrid"></div>
