@@ -84,9 +84,9 @@
   .filters{display:flex; gap:6px; margin-bottom:10px; overflow-x:auto;}
   .filters .f{flex:0 0 auto; padding:7px 12px; border-radius:999px; font-size:12px; background:var(--panel2); border:1px solid var(--line); color:var(--muted); cursor:pointer;}
   .filters .f.sel{background:var(--accent); color:#fff; border-color:var(--accent);}
-  .modal-overlay{display:none; position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:40; align-items:flex-end; justify-content:center;}
+  .modal-overlay{display:none; position:fixed; top:0; left:0; right:0; height:100%; background:rgba(0,0,0,.6); z-index:40; align-items:flex-end; justify-content:center; overflow:hidden;}
   .modal-overlay.open{display:flex;}
-  .modal{background:var(--panel); width:100%; max-width:640px; border-radius:18px 18px 0 0; max-height:92vh; overflow-y:auto; padding:18px; padding-bottom:30px; position:relative;}
+  .modal{background:var(--panel); width:100%; max-width:640px; border-radius:18px 18px 0 0; max-height:88vh; overflow-y:auto; padding:18px; padding-bottom:44px; position:relative; -webkit-overflow-scrolling:touch; overscroll-behavior:contain;}
   .close-x{position:absolute; top:14px; right:18px; font-size:20px; color:var(--muted); cursor:pointer;}
   .small-note{font-size:11px; color:var(--muted); margin-top:-4px; margin-bottom:8px;}
   .section-title{font-size:13px; color:var(--accent); font-weight:700; margin:16px 0 8px; border-top:1px solid var(--line); padding-top:14px;}
@@ -239,33 +239,67 @@ function customAlert(message){
 }
 // Fix de teclado en iPad/iPhone: iOS no actualiza vh cuando aparece el teclado,
 // así que sincronizamos la altura real del overlay con el viewport visual (visualViewport API).
+// ── FIX TECLADO iOS/iPadOS ───────────────────────────────────────────────────
+// En iOS el viewport del layout NO se reduce cuando aparece el teclado.
+// La solución es re-anclar el overlay usando visualViewport.offsetTop + height,
+// que sí refleja el área visible real sobre el teclado.
 function syncOverlayToViewport(){
   const overlay = document.getElementById('modalOverlay');
-  if(!overlay) return;
-  const h = window.visualViewport ? window.visualViewport.height : window.innerHeight;
-  overlay.style.height = h + 'px';
-  const modal = overlay.querySelector('.modal');
-  if(modal) modal.style.maxHeight = Math.round(h*0.94) + 'px';
+  if(!overlay || !overlay.classList.contains('open')) return;
+  const vv = window.visualViewport;
+  if(vv){
+    const top    = Math.round(vv.offsetTop);
+    const left   = Math.round(vv.offsetLeft);
+    const width  = Math.round(vv.width);
+    const height = Math.round(vv.height);
+    overlay.style.top    = top  + 'px';
+    overlay.style.left   = left + 'px';
+    overlay.style.width  = width + 'px';
+    overlay.style.height = height + 'px';
+    const modal = overlay.querySelector('.modal');
+    if(modal) modal.style.maxHeight = Math.round(height * 0.93) + 'px';
+  }
+}
+// Bloquear scroll del body cuando el modal está abierto
+// evita que iOS salte la página mientras el teclado sube
+function lockBodyScroll(lock){
+  if(lock){
+    document.body.style.overflow  = 'hidden';
+    document.body.style.position  = 'fixed';
+    document.body.style.width     = '100%';
+  } else {
+    document.body.style.overflow  = '';
+    document.body.style.position  = '';
+    document.body.style.width     = '';
+  }
+}
+// Scroll del campo activo dentro del modal (no en la página)
+function scrollFieldIntoModal(field){
+  const modal = field.closest('.modal');
+  if(!modal) return;
+  setTimeout(()=>{
+    const fieldRect  = field.getBoundingClientRect();
+    const modalRect  = modal.getBoundingClientRect();
+    const offset     = fieldRect.top - modalRect.top - 80;
+    if(offset > 0) modal.scrollTop += offset;
+  }, 350);
 }
 if(window.visualViewport){
   window.visualViewport.addEventListener('resize', syncOverlayToViewport);
   window.visualViewport.addEventListener('scroll', syncOverlayToViewport);
 }
-window.addEventListener('resize', syncOverlayToViewport);
 document.addEventListener('focusin', (e)=>{
   if(e.target.matches('input, textarea, select')){
     syncOverlayToViewport();
-    setTimeout(()=>{
-      syncOverlayToViewport();
-      e.target.scrollIntoView({block:'center', behavior:'smooth'});
-    }, 350);
+    scrollFieldIntoModal(e.target);
   }
 });
 document.addEventListener('focusout', (e)=>{
   if(e.target.matches('input, textarea, select')){
-    setTimeout(syncOverlayToViewport, 350);
+    setTimeout(syncOverlayToViewport, 400);
   }
 });
+// ─────────────────────────────────────────────────────────────────────────────
 
 // ---------- GETTERS ----------
 const getProject = id=>state.projects.find(x=>x.id===id);
@@ -723,7 +757,9 @@ function openRollModal(projectId, id){
     <h2>${r?'Editar':'Nuevo'} roll</h2>
     <input type="hidden" id="m_id" value="${r?r.id:''}">
     <input type="hidden" id="m_projectId" value="${projectId}">
-    <div class="field"><label>Nombre del roll / tarjeta</label><input id="m_nombre" value="${r?r.nombre:''}" placeholder="Ej. Card 01"></div>
+    <div class="field"><label>Nombre del roll / tarjeta</label><input id="m_nombre" value="${r?r.nombre:''}" placeholder="Ej. Card 01">
+      ${!r ? renderSugerencia(sugerirSiguiente(rollsOf(projectId),'nombre'),'m_nombre') : ''}
+    </div>
     <div class="row-actions">
       <button class="btn-secondary" onclick="closeModal()">Cancelar</button>
       <button class="btn-primary" onclick="saveRoll()">Guardar</button>
@@ -791,7 +827,9 @@ function openEscenaModal(rollId, id){
     <h2>${e?'Editar':'Nueva'} escena</h2>
     <input type="hidden" id="m_id" value="${e?e.id:''}">
     <input type="hidden" id="m_rollId" value="${rollId}">
-    <div class="field"><label>Nombre/Número de escena</label><input id="m_nombre" value="${e?e.nombre:''}" placeholder="Ej. ESC 03"></div>
+    <div class="field"><label>Nombre/Número de escena</label><input id="m_nombre" value="${e?e.nombre:''}" placeholder="Ej. ESC 03">
+      ${!e ? renderSugerencia(sugerirSiguiente(escenasOf(rollId),'nombre'),'m_nombre') : ''}
+    </div>
     <div class="field"><label>Descripción</label><textarea id="m_descripcion">${e?e.descripcion||'':''}</textarea></div>
     <div class="field"><label>Locación</label><input id="m_locacion" value="${e?e.locacion||'':''}" placeholder="Ej. Estudio 2, set cocina"></div>
     <div class="row-actions">
@@ -903,6 +941,32 @@ function getUltimoPlano(){
   if(!state.planos.length) return null;
   return [...state.planos].sort((a,b)=>(b.createdAt||0)-(a.createdAt||0))[0];
 }
+function sugerirSiguiente(lista, campo){
+  if(!lista.length) return null;
+  let max = 0;
+  let prefix = '';
+  lista.forEach(item=>{
+    const val = (item[campo]||'').trim();
+    const match = val.match(/^([A-Za-z_\s]*)(\d+)([^0-9]*)$/);
+    if(match){
+      const n = parseInt(match[2],10);
+      if(n>max){ max=n; prefix=match[1]; }
+    }
+  });
+  if(!max) return null;
+  const next = String(max+1).padStart(2,'0');
+  return prefix+next;
+}
+function renderSugerencia(sug, targetId){
+  if(!sug) return '';
+  return `<div style="margin-top:4px;">
+    <span onclick="document.getElementById('${targetId}').value='${sug}'; this.parentElement.style.display='none';"
+      style="display:inline-block; cursor:pointer; font-size:11px; padding:4px 10px; border-radius:999px;
+      background:rgba(5,64,237,.08); color:#0540ed; border:1px dashed #0540ed;">
+      ✦ Sugerido: ${sug} — toca para confirmar
+    </span>
+  </div>`;
+}
 // ---------- SELECTOR CON OPCIONES + VALOR PERSONALIZADO ----------
 const PRESETS = {
   resolucion: ['1920 x 1080 (FHD)','2048 x 1080 (2K DCI)','3840 x 2160 (4K UHD)','4096 x 2160 (4K DCI)','6144 x 3240 (6K)','7680 x 4320 (8K)'],
@@ -977,7 +1041,9 @@ function openPlanoModal(escenaId, id){
     <input type="hidden" id="m_id" value="${pl?pl.id:''}">
     <input type="hidden" id="m_escenaId" value="${escenaId}">
     <div class="grid">
-      <div class="field"><label>Número de plano</label><input id="m_numero" value="${pl?pl.numero:''}" placeholder="Ej. 01"></div>
+      <div class="field"><label>Número de plano</label><input id="m_numero" value="${pl?pl.numero:''}" placeholder="Ej. 01">
+        ${!pl ? renderSugerencia(sugerirSiguiente(state.planos,'numero'),'m_numero') : ''}
+      </div>
       <div class="field"><label>Interior / Exterior</label>
         <select id="m_intext"><option ${v('intExt')==='Interior'?'selected':''}>Interior</option><option ${v('intExt')==='Exterior'?'selected':''}>Exterior</option></select>
       </div>
@@ -1202,7 +1268,9 @@ function openClipModal(planoId, id){
     <input type="hidden" id="m_id" value="${c?c.id:''}">
     <input type="hidden" id="m_planoId" value="${planoId}">
     <div class="grid">
-      <div class="field"><label>Número de clip</label><input id="c_numero" value="${c?c.numero||'':''}" placeholder="Ej. C001"></div>
+      <div class="field"><label>Número de clip</label><input id="c_numero" value="${c?c.numero||'':''}" placeholder="Ej. C001">
+        ${!c ? renderSugerencia(sugerirSiguiente(state.clips,'numero'),'c_numero') : ''}
+      </div>
       <div class="field"><label>Toma(s)</label><input id="c_tomas" value="${c?c.tomas||'':''}" placeholder="Ej. 2, 4"></div>
     </div>
     <div class="field"><label>Duración</label><input id="c_duracion" value="${c?c.duracion||'':''}" placeholder="Ej. 16 o 1:14" onblur="autoFormatDuracion(this)"></div>
@@ -1303,8 +1371,18 @@ function abrirFotoCompleta(src){
   overlay.innerHTML = `<img src="${src}" style="max-width:92%; max-height:85vh; border-radius:12px; box-shadow:0 8px 30px rgba(0,0,0,.5);">`;
   document.body.appendChild(overlay);
 }
-function openModal(){ document.getElementById('modalOverlay').classList.add('open'); syncOverlayToViewport(); }
-function closeModal(){ document.getElementById('modalOverlay').classList.remove('open'); }
+function openModal(){
+  const overlay = document.getElementById('modalOverlay');
+  overlay.classList.add('open');
+  lockBodyScroll(true);
+  syncOverlayToViewport();
+}
+function closeModal(){
+  const overlay = document.getElementById('modalOverlay');
+  overlay.classList.remove('open');
+  lockBodyScroll(false);
+  overlay.style.top=''; overlay.style.left=''; overlay.style.width=''; overlay.style.height='';
+}
 
 // ---------- REPORTES ----------
 function renderReports(){
@@ -1426,7 +1504,6 @@ nav.view = 'lock';
 pinStage = state.pin ? 'enter' : 'setNew';
 render();
 
-// Registrar service worker para que la app funcione offline una vez instalada
 if('serviceWorker' in navigator){
   window.addEventListener('load', ()=>{
     navigator.serviceWorker.register('service-worker.js').catch(()=>{});
