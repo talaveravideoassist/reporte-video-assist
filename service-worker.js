@@ -1,4 +1,4 @@
-const CACHE_NAME = 'talavera-va-upgrade-v10';
+const CACHE_NAME = 'talavera-va-upgrade-v12';
 const ASSETS = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (event) => {

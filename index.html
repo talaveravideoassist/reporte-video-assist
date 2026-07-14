@@ -1477,8 +1477,7 @@ function exportProjectPDF(projectId){
         clipsOf(pl.id).forEach(c=>{
           totalClips++;
           html += `<div class="pclip">
-            <span class="badge ${badgeClassEstado(c.estado)}" style="float:right;padding:2px 8px;border-radius:8px;font-size:10px;">${estadoEmoji(c.estado)}${c.estado||'-'}</span>
-            <h4>Clip ${c.numero||''} ${c.tomas? '— Toma(s): '+c.tomas:''}</h4>
+            <h4>Clip ${c.numero||''} ${c.tomas? '— Toma(s): '+c.tomas:''} <span class="badge ${badgeClassEstado(c.estado)}" style="display:inline-block;vertical-align:middle;padding:1px 7px;border-radius:8px;font-size:9px;margin-left:6px;">${estadoEmoji(c.estado)}${c.estado||'-'}</span></h4>
             <div class="meta">
               Duración: ${c.duracion||'-'} ${c.tags&&c.tags.length? '| Tags: '+c.tags.join(', '):''}
               ${c.notas? '<br>Notas: '+c.notas:''}
