@@ -78,6 +78,15 @@
   .shortcut:active{background:var(--panel2);}
   .shortcut .ic{font-size:22px;}
   .shortcut .lbl{font-size:12px; color:var(--muted); margin-top:4px; font-weight:600;}
+  .resumen-plano{background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:14px; margin-bottom:16px;}
+  .resumen-plano h3{margin:0 0 10px; font-size:16px; border-bottom:1px solid var(--line); padding-bottom:8px; color:var(--accent);}
+  .resumen-body{display:flex; gap:12px; align-items:flex-start;}
+  .resumen-foto{width:140px; min-width:140px; height:80px; object-fit:cover; border-radius:8px; border:1px solid var(--line); cursor:pointer;}
+  .resumen-foto-placeholder{width:140px; min-width:140px; height:80px; border-radius:8px; border:1px dashed var(--line); display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:11px;}
+  .resumen-info{flex:1; min-width:0; font-size:12px; color:var(--muted); line-height:1.7;}
+  .resumen-info b{color:var(--text);}
+  .resumen-clips{margin-top:8px; display:flex; flex-wrap:wrap; gap:6px;}
+  .resumen-clip-chip{font-size:11px; padding:3px 9px; border-radius:999px; font-weight:600;}
   .fab{position:fixed; bottom:18px; right:18px; left:18px; z-index:30; max-width:780px; margin:0 auto;}
   .empty{text-align:center; color:var(--muted); padding:40px 10px; font-size:13px;}
   .search-box{margin-bottom:10px;}
@@ -333,11 +342,14 @@ function render(){
   if(nav.view==='escena') return app.innerHTML = renderHeader()+renderBreadcrumb()+renderEscena();
   if(nav.view==='plano') return app.innerHTML = renderHeader()+renderBreadcrumb()+renderPlano();
   if(nav.view==='reports') return app.innerHTML = renderHeader()+renderBreadcrumbSimple('Reportes')+renderReports();
+  if(nav.view==='resumen') return app.innerHTML = renderHeader()+renderBreadcrumb()+renderResumen();
 }
 
 function renderHeader(){
   const isDark = document.documentElement.classList.contains('dark');
   const logo = isDark ? LOGO_BLANCO : LOGO_AZUL;
+  const enProyecto = !!nav.projectId && nav.view !== 'resumen';
+  const enResumen = nav.view === 'resumen';
   return `<header>
     <div class="brand">
       <img src="${logo}" alt="${state.branding.title}" style="height:30px; width:auto;">
@@ -345,6 +357,8 @@ function renderHeader(){
     <div class="userline">
       <span>${state.branding.desc||''}</span>
       <span>
+        ${enProyecto ? `<a onclick="goDirect('resumen',{projectId:'${nav.projectId}'})" style="margin-right:14px;" title="Resumen Visual">🎞️ Resumen</a>` : ''}
+        ${enResumen ? `<a onclick="goBack()" style="margin-right:14px;">← Volver</a>` : ''}
         <a onclick="toggleTheme()" style="margin-right:14px;">${isDark? '☀️ Claro' : '🌙 Oscuro'}</a>
         <a onclick="lockApp()">🔒 Bloquear</a>
       </span>
@@ -502,7 +516,7 @@ function renderGlobalSearchResults(term){
   state.clips.forEach(c=>{
     const pl=getPlano(c.planoId); if(!pl) return; const e=getEscena(pl.escenaId); if(!e) return; const r=getRoll(e.rollId); if(!r) return;
     const tagMatch = (c.tags||[]).some(t=>t.toLowerCase().includes(term));
-    if(tagMatch || matchesText(c, term, ['numero','tomas','duracion','estado','notas']))
+    if(tagMatch || matchesText(c, term, ['numero','tomas','duracion','estado','notas','playback']))
       results.push({type:'Clip', label:'Clip '+(c.numero||'')+(c.tomas? ' — Toma(s) '+c.tomas:''), sub:'Plano '+pl.numero, go:()=>go('plano',{projectId:r.projectId, rollId:r.id, escenaId:e.id, planoId:pl.id})});
   });
   window._globalResults = results;
@@ -1277,6 +1291,7 @@ function renderPlano(){
           <h3>Clip ${c.numero||''} ${c.tomas? '— Toma(s): '+c.tomas:''}</h3>
           <div class="meta">
             ⏱️ Duración: ${c.duracion||'-'}<br>
+            ${c.playback? `🎬 Ref. Playback: <b>${c.playback}</b><br>`:''}
             ${c.tags&&c.tags.length? '🏷️ '+c.tags.join(', ')+'<br>':''}
             ${c.notas? '📝 '+c.notas:''}
           </div>
@@ -1308,6 +1323,10 @@ function openClipModal(planoId, id){
       <div class="field"><label>Toma(s)</label><input id="c_tomas" value="${c?c.tomas||'':''}" placeholder="Ej. 2, 4"></div>
     </div>
     <div class="field"><label>Duración</label><input id="c_duracion" value="${c?c.duracion||'':''}" placeholder="Ej. 16 o 1:14" onblur="autoFormatDuracion(this)"></div>
+    <div class="field">
+      <label>Ref. Playback <span style="font-size:10px;color:var(--muted)">(N° en monitor/grabador — solo visible en app)</span></label>
+      <input id="c_playback" value="${c?c.playback||'':''}" placeholder="Ej. 0042">
+    </div>
     <div class="field"><label>Estado</label><div class="tag-grid" id="estadoGrid"></div></div>
     <div class="field"><label>Special Tags</label>
       <div class="tag-grid" id="tagGrid"></div>
@@ -1378,6 +1397,7 @@ function saveClip(){
     numero: document.getElementById('c_numero').value,
     tomas: document.getElementById('c_tomas').value,
     duracion: document.getElementById('c_duracion').value,
+    playback: document.getElementById('c_playback').value.trim(),
     estado: tempEstado,
     tags: [...tempTags],
     notas: document.getElementById('c_notas').value,
@@ -1419,6 +1439,56 @@ function closeModal(){
 }
 
 // ---------- REPORTES ----------
+// ---------- RESUMEN VISUAL ----------
+function chipEstado(c){
+  const cls = badgeClassEstado(c.estado);
+  const styleMap = {
+    circle:'background:rgba(212,175,55,.2);color:#a8821f;',
+    use:'background:rgba(47,184,106,.2);color:#1f9d57;',
+    alt:'background:rgba(224,201,60,.2);color:#b8a514;',
+    hold:'background:rgba(255,140,47,.2);color:#e07a1f;',
+    nogood:'background:rgba(229,84,79,.2);color:#d6453f;'
+  };
+  return `<span class="resumen-clip-chip" style="${styleMap[cls]||''}">${estadoEmoji(c.estado)}${c.estado||'-'} ${c.numero||''}</span>`;
+}
+function renderResumen(){
+  const p = getProject(nav.projectId);
+  if(!p) return `<main><div class="empty">Proyecto no encontrado</div></main>`;
+  // Recopilar todos los planos del proyecto ordenados por createdAt
+  const planos = planosOfProject(p.id).sort((a,b)=>(a.createdAt||0)-(b.createdAt||0));
+  if(!planos.length) return `<main><div class="empty">Aún no hay planos registrados en este proyecto.</div></main>`;
+  const rows = planos.map(pl=>{
+    const esc = getEscena(pl.escenaId);
+    const roll = esc? getRoll(esc.rollId) : null;
+    const clips = clipsOf(pl.id).sort((a,b)=>(a.createdAt||0)-(b.createdAt||0));
+    const fotoHtml = pl.imagen
+      ? `<img class="resumen-foto" src="${pl.imagen}" onclick="abrirFotoCompleta('${pl.imagen}')" title="Toca para ampliar">`
+      : `<div class="resumen-foto-placeholder">Sin foto</div>`;
+    const clipsHtml = clips.length
+      ? `<div class="resumen-clips">${clips.map(c=>chipEstado(c)).join('')}</div>`
+      : `<div style="font-size:11px;color:var(--muted);margin-top:6px;">Sin clips registrados</div>`;
+    return `<div class="resumen-plano">
+      <h3>Plano ${pl.numero}${pl.descripcion? ' — '+pl.descripcion:''}</h3>
+      <div class="resumen-body">
+        ${fotoHtml}
+        <div class="resumen-info">
+          ${roll? `<b>Roll:</b> ${roll.nombre}<br>`:''}
+          ${esc? `<b>Escena:</b> ${esc.nombre}${esc.locacion?' · '+esc.locacion:''}<br>`:''}
+          ${pl.optica? `<b>Óptica:</b> ${pl.optica}${pl.diafragma?' · '+pl.diafragma:''}<br>`:''}
+          ${pl.observaciones? `<b>Observaciones:</b> ${pl.observaciones}<br>`:''}
+          <b>Clips:</b>${clipsHtml}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+  return `<main>
+    <div class="card" style="padding:10px 14px; margin-bottom:12px;">
+      <span style="font-size:12px;color:var(--muted);">🎞️ ${planos.length} plano(s) registrados · ordenados cronológicamente</span>
+    </div>
+    ${rows}
+  </main>`;
+}
+
 function renderReports(){
   const search = (window._repSearch||'').toLowerCase();
   let list = state.projects.filter(p=> !search || `${p.nombre} ${p.productora}`.toLowerCase().includes(search));
