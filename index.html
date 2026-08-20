@@ -189,6 +189,14 @@ function getStorageUsedMB(){
     return bytes / (1024*1024);
   }catch(e){ return 0; }
 }
+function getPhotosUsedMB(){
+  try{
+    // Suma el peso de todas las imágenes base64 guardadas en planos
+    let total = 0;
+    state.planos.forEach(pl=>{ if(pl.imagen) total += pl.imagen.length * 0.75; }); // base64 → bytes reales
+    return total / (1024*1024);
+  }catch(e){ return 0; }
+}
 function fmtMB(mb){ return mb < 0.1 ? '<0.1 MB' : mb.toFixed(1)+' MB'; }
 function uid(p){ return p+'_'+Date.now()+'_'+Math.floor(Math.random()*1000); }
 function now(){ return Date.now(); }
@@ -471,19 +479,28 @@ function renderDashboard(){
 }
 function renderStorageIndicator(){
   const mb = getStorageUsedMB();
+  const mbFotos = getPhotosUsedMB();
+  const mbDatos = Math.max(0, mb - mbFotos);
   let color = 'var(--ok)', msg = 'Espacio saludable';
-  if(mb > 6){ color = 'var(--bad)'; msg = 'Espacio alto — considera purgar proyectos antiguos'; }
-  else if(mb > 3){ color = 'var(--warn)'; msg = 'Espacio moderado'; }
+  if(mb > 6){ color = 'var(--bad)'; msg = '⚠️ Espacio alto — exporta y elimina proyectos antiguos'; }
+  else if(mb > 3){ color = 'var(--warn)'; msg = 'Espacio moderado — considera purgar proyectos terminados'; }
   const pct = Math.min(100, Math.round((mb/8)*100));
+  const pctFotos = Math.min(100, Math.round((mbFotos/8)*100));
+  const pctDatos = Math.min(pct, Math.round((mbDatos/8)*100));
   return `<div class="card" style="padding:12px 14px;">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-      <span style="font-size:12px; color:var(--muted);">💾 Almacenamiento local usado</span>
-      <span style="font-size:12px; font-weight:700; color:${color};">${fmtMB(mb)}</span>
+      <span style="font-size:12px; color:var(--muted);">💾 Almacenamiento local</span>
+      <span style="font-size:12px; font-weight:700; color:${color};">${fmtMB(mb)} / ~8 MB</span>
     </div>
-    <div style="height:6px; background:var(--panel2); border-radius:999px; overflow:hidden;">
-      <div style="height:100%; width:${pct}%; background:${color}; border-radius:999px;"></div>
+    <div style="height:8px; background:var(--panel2); border-radius:999px; overflow:hidden; display:flex;">
+      <div style="height:100%; width:${pctDatos}%; background:var(--accent); border-radius:999px 0 0 999px; transition:.3s;"></div>
+      <div style="height:100%; width:${pctFotos}%; background:var(--warn); transition:.3s;"></div>
     </div>
-    <div style="font-size:11px; color:${color}; margin-top:6px;">${msg}</div>
+    <div style="display:flex; gap:12px; margin-top:6px; font-size:10px; color:var(--muted);">
+      <span>🔵 Datos: ${fmtMB(mbDatos)}</span>
+      <span>🟡 Fotos: ${fmtMB(mbFotos)}</span>
+      <span style="margin-left:auto;color:${color};font-weight:600;">${msg}</span>
+    </div>
   </div>`;
 }
 function onGlobalSearch(v){
@@ -1449,7 +1466,7 @@ function chipEstado(c){
     hold:'background:rgba(255,140,47,.2);color:#e07a1f;',
     nogood:'background:rgba(229,84,79,.2);color:#d6453f;'
   };
-  return `<span class="resumen-clip-chip" style="${styleMap[cls]||''}">${estadoEmoji(c.estado)}${c.estado||'-'} ${c.numero||''}</span>`;
+  return `<span class="resumen-clip-chip" style="${styleMap[cls]||''}">${estadoEmoji(c.estado)}${c.estado||'-'} ${c.numero||''}${c.playback? ' <span style="opacity:.7;font-weight:400">/ '+c.playback+'</span>':''}</span>`;
 }
 function renderResumen(){
   const p = getProject(nav.projectId);
@@ -1467,8 +1484,11 @@ function renderResumen(){
     const clipsHtml = clips.length
       ? `<div class="resumen-clips">${clips.map(c=>chipEstado(c)).join('')}</div>`
       : `<div style="font-size:11px;color:var(--muted);margin-top:6px;">Sin clips registrados</div>`;
+    const navIds = roll && esc ? `{projectId:'${p.id}',rollId:'${roll.id}',escenaId:'${esc.id}',planoId:'${pl.id}'}` : null;
     return `<div class="resumen-plano">
-      <h3>Plano ${pl.numero}${pl.descripcion? ' — '+pl.descripcion:''}</h3>
+      <h3 ${navIds? `onclick="goDirect('plano',${navIds})" style="cursor:pointer;"`:''} title="${navIds?'Toca para ver el detalle del plano':''}">
+        Plano ${pl.numero}${pl.descripcion? ' — '+pl.descripcion:''} ${navIds? '<span style="font-size:11px;opacity:.5;font-weight:400">→</span>':''}
+      </h3>
       <div class="resumen-body">
         ${fotoHtml}
         <div class="resumen-info">
