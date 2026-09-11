@@ -12,7 +12,7 @@
 :root{
     --bg:#f5f7fb; --panel:#ffffff; --panel2:#eef1f8; --line:#dbe2f0;
     --text:#11142b; --muted:#6b7280; --accent:#0540ed; --accent2:#0334bd;
-    --ok:#1f9d57; --bad:#d6453f; --warn:#c98a1f; --hold:#e07a1f; --alt:#b8a514; --gold:#a8821f; --radius:14px;
+    --ok:#1f9d57; --bad:#d6453f; --warn:#c98a1f; --hold:#e07a1f; --alt:#0d9488; --gold:#a8821f; --radius:14px;
     --card-shadow:0 1px 3px rgba(17,20,43,.06);
   }
   html.dark{
@@ -63,7 +63,7 @@
   .badge.circle{background:rgba(212,175,55,.18); color:var(--gold); border:1px solid var(--gold);}
   .badge.nogood{background:rgba(229,84,79,.15); color:var(--bad); border:1px solid var(--bad);}
   .badge.hold{background:rgba(255,140,47,.18); color:var(--hold); border:1px solid var(--hold);}
-  .badge.alt{background:rgba(224,201,60,.18); color:var(--alt); border:1px solid var(--alt);}
+  .badge.alt{background:rgba(13,148,136,.15); color:var(--alt); border:1px solid var(--alt);}
   .badge.estado-encurso{background:rgba(47,184,106,.15); color:var(--ok); border:1px solid var(--ok);}
   .badge.estado-finalizado{background:rgba(79,140,255,.15); color:var(--accent); border:1px solid var(--accent);}
   .badge.estado-pausado{background:rgba(224,168,60,.15); color:var(--warn); border:1px solid var(--warn);}
@@ -182,6 +182,85 @@ function load(){
   if(!state.branding) state.branding = {title:'TALAVERA', subtitle:'VIDEO ASSIST SERVICE PROFESIONAL', desc:''};
 }
 function save(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+
+// ── INDEXEDDB PARA FOTOS ─────────────────────────────────────────────────────
+// Fotos en IndexedDB (capacidad mucho mayor que localStorage)
+// El texto (proyectos, rolls, clips, etc.) sigue en localStorage (liviano)
+const photoCache = new Map(); // planoId → base64 dataUrl
+const photoDB = {
+  _db: null,
+  open(){
+    if(this._db) return Promise.resolve(this._db);
+    return new Promise((res,rej)=>{
+      const req = indexedDB.open('talavera-photos', 1);
+      req.onupgradeneeded = e=>{ e.target.result.createObjectStore('photos'); };
+      req.onsuccess = e=>{ this._db=e.target.result; res(this._db); };
+      req.onerror = ()=>rej(req.error);
+    });
+  },
+  async put(key, val){
+    const db = await this.open();
+    return new Promise((res,rej)=>{
+      const tx = db.transaction('photos','readwrite');
+      tx.objectStore('photos').put(val, key);
+      tx.oncomplete = res; tx.onerror = ()=>rej(tx.error);
+    });
+  },
+  async get(key){
+    const db = await this.open();
+    return new Promise((res,rej)=>{
+      const req = db.transaction('photos','readonly').objectStore('photos').get(key);
+      req.onsuccess = ()=>res(req.result||null); req.onerror = ()=>rej(req.error);
+    });
+  },
+  async delete(key){
+    const db = await this.open();
+    return new Promise((res,rej)=>{
+      const tx = db.transaction('photos','readwrite');
+      tx.objectStore('photos').delete(key);
+      tx.oncomplete = res; tx.onerror = ()=>rej(tx.error);
+    });
+  },
+  async getAll(){
+    const db = await this.open();
+    return new Promise((res,rej)=>{
+      const result = {};
+      const req = db.transaction('photos','readonly').objectStore('photos').openCursor();
+      req.onsuccess = e=>{
+        const cursor = e.target.result;
+        if(cursor){ result[cursor.key]=cursor.value; cursor.continue(); }
+        else res(result);
+      };
+      req.onerror = ()=>rej(req.error);
+    });
+  }
+};
+function getPhoto(planoId){ return photoCache.get(planoId)||null; }
+async function loadPhotos(){
+  try{
+    const all = await photoDB.getAll();
+    Object.entries(all).forEach(([k,v])=>photoCache.set(k,v));
+    // Migrar fotos antiguas desde localStorage a IndexedDB
+    let migrated = false;
+    state.planos.forEach(pl=>{
+      if(pl.imagen && pl.imagen.startsWith('data:')){
+        photoDB.put(pl.id, pl.imagen).catch(()=>{});
+        photoCache.set(pl.id, pl.imagen);
+        pl.imagen = 'idb';
+        migrated = true;
+      }
+    });
+    if(migrated){ save(); }
+  }catch(e){
+    // Si IndexedDB no está disponible, usar las fotos del localStorage como están
+    console.warn('IndexedDB no disponible, usando localStorage para fotos:', e);
+    state.planos.forEach(pl=>{
+      if(pl.imagen && pl.imagen.startsWith('data:')) photoCache.set(pl.id, pl.imagen);
+    });
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 function getStorageUsedMB(){
   try{
     const raw = localStorage.getItem(STORAGE_KEY) || '';
@@ -191,9 +270,8 @@ function getStorageUsedMB(){
 }
 function getPhotosUsedMB(){
   try{
-    // Suma el peso de todas las imágenes base64 guardadas en planos
     let total = 0;
-    state.planos.forEach(pl=>{ if(pl.imagen) total += pl.imagen.length * 0.75; }); // base64 → bytes reales
+    photoCache.forEach(v=>{ if(v) total += v.length * 0.75; });
     return total / (1024*1024);
   }catch(e){ return 0; }
 }
@@ -334,6 +412,23 @@ function clipsOfEscena(escenaId){ const plids = planosOf(escenaId).map(p=>p.id);
 function escenasOfProject(projectId){ const rids = rollsOf(projectId).map(r=>r.id); return state.escenas.filter(e=>rids.includes(e.rollId)); }
 function planosOfProject(projectId){ const eids = escenasOfProject(projectId).map(e=>e.id); return state.planos.filter(p=>eids.includes(p.escenaId)); }
 function clipsOfProject(projectId){ const plids = planosOfProject(projectId).map(p=>p.id); return state.clips.filter(c=>plids.includes(c.planoId)); }
+// Sugerencias inteligentes: misma escena en otro roll → continúa; escena nueva → empieza en 01
+function planosOfSameEscena(escenaId){
+  const esc = getEscena(escenaId);
+  if(!esc) return [];
+  const roll = getRoll(esc.rollId);
+  if(!roll) return [];
+  const coincidentes = state.escenas.filter(e=>{
+    const r = getRoll(e.rollId);
+    return r && r.projectId===roll.projectId && e.nombre.trim()===esc.nombre.trim();
+  });
+  const eids = coincidentes.map(e=>e.id);
+  return state.planos.filter(p=>eids.includes(p.escenaId));
+}
+function clipsOfSameEscena(escenaId){
+  const plids = planosOfSameEscena(escenaId).map(p=>p.id);
+  return state.clips.filter(c=>plids.includes(c.planoId));
+}
 function lastUpdateRoll(rollId){ const r=getRoll(rollId); let m=r.updatedAt||0; escenasOf(rollId).forEach(e=>{ m=Math.max(m,e.updatedAt||0); planosOf(e.id).forEach(p=>{ m=Math.max(m,p.updatedAt||0); clipsOf(p.id).forEach(c=>m=Math.max(m,c.updatedAt||0)); }); }); return m; }
 function lastUpdateEscena(escenaId){ const e=getEscena(escenaId); let m=e.updatedAt||0; planosOf(escenaId).forEach(p=>{ m=Math.max(m,p.updatedAt||0); clipsOf(p.id).forEach(c=>m=Math.max(m,c.updatedAt||0)); }); return m; }
 function lastUpdatePlano(planoId){ const p=getPlano(planoId); let m=p.updatedAt||0; clipsOf(planoId).forEach(c=>m=Math.max(m,c.updatedAt||0)); return m; }
@@ -694,7 +789,15 @@ function exportProjectJSON(id){
   const planos = state.planos.filter(pl=>eids.includes(pl.escenaId));
   const plids = planos.map(pl=>pl.id);
   const clips = state.clips.filter(c=>plids.includes(c.planoId));
-  const backup = { exportadoEl: new Date().toISOString(), proyecto: p, rolls, escenas, planos, clips };
+  // Incluir fotos reales desde photoCache para que el respaldo sea completo
+  const planosConFotos = planos.map(pl=>{
+    if(pl.imagen === 'idb'){
+      const foto = photoCache.get(pl.id);
+      return {...pl, imagen: foto || null};
+    }
+    return pl;
+  });
+  const backup = { exportadoEl: new Date().toISOString(), proyecto: p, rolls, escenas, planos: planosConFotos, clips };
   const blob = new Blob([JSON.stringify(backup, null, 2)], {type:'application/json'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -706,10 +809,11 @@ function exportProjectJSON(id){
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
-function deleteProjectExecute(id){
+async function deleteProjectExecute(id){
   const rids = rollsOf(id).map(r=>r.id);
   const eids = state.escenas.filter(e=>rids.includes(e.rollId)).map(e=>e.id);
   const plids = state.planos.filter(p=>eids.includes(p.escenaId)).map(p=>p.id);
+  for(const pid of plids){ try{ await photoDB.delete(pid); photoCache.delete(pid); }catch(e){} }
   state.clips = state.clips.filter(c=>!plids.includes(c.planoId));
   state.planos = state.planos.filter(p=>!eids.includes(p.escenaId));
   state.escenas = state.escenas.filter(e=>!rids.includes(e.rollId));
@@ -809,9 +913,10 @@ function saveRoll(){
   toast(existing? '✅ Roll actualizado correctamente' : '✅ Roll creado correctamente');
 }
 function deleteRoll(id){
-  customConfirm('Esto eliminará el roll y sus escenas/planos/clips. ¿Continuar?', ()=>{
+  customConfirm('Esto eliminará el roll y sus escenas/planos/clips. ¿Continuar?', async ()=>{
     const eids = escenasOf(id).map(e=>e.id);
     const plids = state.planos.filter(p=>eids.includes(p.escenaId)).map(p=>p.id);
+    for(const pid of plids){ try{ await photoDB.delete(pid); photoCache.delete(pid); }catch(e){} }
     state.clips = state.clips.filter(c=>!plids.includes(c.planoId));
     state.planos = state.planos.filter(p=>!eids.includes(p.escenaId));
     state.escenas = state.escenas.filter(e=>e.rollId!==id);
@@ -843,6 +948,7 @@ function renderRoll(){
           <div class="meta">${e.descripcion||'-'}<br>▸ ${plan.length} plano(s) · 🎬 ${clip.length} clip(s) · 🕐 ${fmtDate(lastUpdateEscena(e.id))}</div>
           <div class="actions">
             <button class="btn-secondary" onclick="event.stopPropagation();openEscenaModal('${r.id}','${e.id}')">Editar</button>
+            <button class="btn-secondary" onclick="event.stopPropagation();openMoverEscenaModal('${e.id}')">↗️ Mover</button>
             <button class="btn-danger" onclick="event.stopPropagation();deleteEscena('${e.id}')">Eliminar</button>
           </div>
         </div>`;}).join('') : `<div class="empty">Sin escenas aún en este roll.</div>`}
@@ -853,13 +959,25 @@ function renderRoll(){
 
 function openEscenaModal(rollId, id){
   const e = id? getEscena(id): null;
+  // Detectar si es un roll nuevo sin escenas — ofrecer copiar del anterior
+  let sugerenciaCopia = null;
+  if(!e && escenasOf(rollId).length === 0){
+    const allRolls = rollsOf(nav.projectId).sort((a,b)=>(a.createdAt||0)-(b.createdAt||0));
+    const rollIdx = allRolls.findIndex(r=>r.id===rollId);
+    const rollAnterior = rollIdx > 0 ? allRolls[rollIdx-1] : null;
+    if(rollAnterior){
+      const escsAnt = escenasOf(rollAnterior.id);
+      if(escsAnt.length) sugerenciaCopia = escsAnt[escsAnt.length-1];
+    }
+  }
   document.getElementById('modalContent').innerHTML = `
     <span class="close-x" onclick="closeModal()">✕</span>
     <h2>${e?'Editar':'Nueva'} escena</h2>
     <input type="hidden" id="m_id" value="${e?e.id:''}">
     <input type="hidden" id="m_rollId" value="${rollId}">
-    <div class="field"><label>Nombre/Número de escena</label><input id="m_nombre" value="${e?e.nombre:''}" placeholder="Ej. ESC 03">
+    <div class="field"><label>Nombre/Número de escena</label><input id="m_nombre" value="${e?e.nombre:''}" placeholder="Ej. ESC. 01">
       ${!e ? renderSugerencia(sugerirSiguiente(escenasOf(rollId),'nombre'),'m_nombre') : ''}
+      ${sugerenciaCopia ? `<div style="margin-top:6px;"><span onclick="document.getElementById('m_nombre').value='${sugerenciaCopia.nombre.replace(/'/g,"\\'")}'; document.getElementById('m_descripcion').value='${(sugerenciaCopia.descripcion||'').replace(/'/g,"\\'")}'; document.getElementById('m_locacion').value='${(sugerenciaCopia.locacion||'').replace(/'/g,"\\'")}'; this.parentElement.style.display='none';" style="display:inline-block;cursor:pointer;font-size:11px;padding:4px 10px;border-radius:999px;background:rgba(5,64,237,.08);color:#0540ed;border:1px dashed #0540ed;">📋 Copiar "${sugerenciaCopia.nombre}" del roll anterior — toca para continuar</span></div>` : ''}
     </div>
     <div class="field"><label>Descripción</label><textarea id="m_descripcion">${e?e.descripcion||'':''}</textarea></div>
     <div class="field"><label>Locación</label><input id="m_locacion" value="${e?e.locacion||'':''}" placeholder="Ej. Estudio 2, set cocina"></div>
@@ -884,13 +1002,22 @@ function saveEscena(){
   toast(existing? '✅ Escena actualizada correctamente' : '✅ Escena creada correctamente');
 }
 function deleteEscena(id){
-  customConfirm('Esto eliminará la escena y sus planos/clips. ¿Continuar?', ()=>{
+  customConfirm('Esto eliminará la escena y sus planos/clips. ¿Continuar?', async ()=>{
+    const escena = state.escenas.find(e=>e.id===id);
     const plids = planosOf(id).map(p=>p.id);
+    const planos = state.planos.filter(p=>p.escenaId===id);
+    const clips = state.clips.filter(c=>plids.includes(c.planoId));
+    const fotos = new Map(); plids.forEach(pid=>{ const f=photoCache.get(pid); if(f) fotos.set(pid,f); });
+    for(const pid of plids){ try{ await photoDB.delete(pid); photoCache.delete(pid); }catch(e){} }
     state.clips = state.clips.filter(c=>!plids.includes(c.planoId));
     state.planos = state.planos.filter(p=>p.escenaId!==id);
     state.escenas = state.escenas.filter(e=>e.id!==id);
     save(); render();
-    toast('🗑️ Escena eliminada');
+    if(escena) showUndoToast('Escena eliminada', async ()=>{
+      state.escenas.push(escena); state.planos.push(...planos); state.clips.push(...clips);
+      for(const [pid,foto] of fotos){ photoCache.set(pid,foto); await photoDB.put(pid,foto).catch(()=>{}); }
+      save(); render(); toast('↩️ Escena restaurada');
+    });
   }, true);
 }
 
@@ -909,7 +1036,7 @@ function renderEscena(){
     <div class="list">
       ${list.length? list.map(pl=>{
         const cl = clipsOf(pl.id);
-        const thumb = pl.imagen ? `<img src="${pl.imagen}" style="width:64px; height:40px; object-fit:cover; border-radius:8px; border:1px solid var(--line); flex-shrink:0;">` : '';
+        const _thumbSrc = getPhoto(pl.id); const thumb = _thumbSrc ? `<img src="${_thumbSrc}" style="width:64px; height:40px; object-fit:cover; border-radius:8px; border:1px solid var(--line); flex-shrink:0;">` : '';
         return `
         <div class="item" onclick="goDirect('plano',{projectId:'${nav.projectId}', rollId:'${nav.rollId}', escenaId:'${e.id}', planoId:'${pl.id}'})">
           <div style="display:flex; gap:10px; align-items:flex-start;">
@@ -921,6 +1048,7 @@ function renderEscena(){
           </div>
           <div class="actions">
             <button class="btn-secondary" onclick="event.stopPropagation();openPlanoModal('${e.id}','${pl.id}')">Editar</button>
+            <button class="btn-secondary" onclick="event.stopPropagation();openMoverPlanoModal('${pl.id}')">↗️ Mover</button>
             <button class="btn-danger" onclick="event.stopPropagation();deletePlano('${pl.id}')">Eliminar</button>
           </div>
         </div>`;}).join('') : `<div class="empty">Sin planos aún en esta escena.</div>`}
@@ -971,6 +1099,24 @@ function autoDecimals(el, decimals){
 function getUltimoPlano(){
   if(!state.planos.length) return null;
   return [...state.planos].sort((a,b)=>(b.createdAt||0)-(a.createdAt||0))[0];
+}
+function sugerirSiguientePlano(escenaId){
+  const esc = getEscena(escenaId);
+  if(!esc) return sugerirSiguiente([], 'numero');
+  // Buscar en TODAS las escenas del proyecto con el mismo nombre (cross-roll)
+  const roll = getRoll(esc.rollId);
+  const projectId = roll?.projectId;
+  if(projectId){
+    const todosRolls = rollsOf(projectId).map(r=>r.id);
+    const escenasMismoNombre = state.escenas.filter(e=>
+      e.nombre && esc.nombre &&
+      e.nombre.trim().toLowerCase() === esc.nombre.trim().toLowerCase() &&
+      todosRolls.includes(e.rollId)
+    );
+    const todosPlanos = escenasMismoNombre.flatMap(e=>planosOf(e.id));
+    if(todosPlanos.length) return sugerirSiguiente(todosPlanos,'numero');
+  }
+  return sugerirSiguiente(planosOf(escenaId),'numero');
 }
 function sugerirSiguiente(lista, campo){
   if(!lista || !lista.length) return '01';
@@ -1085,7 +1231,7 @@ function openPlanoModal(escenaId, id){
     <input type="hidden" id="m_escenaId" value="${escenaId}">
     <div class="grid">
       <div class="field"><label>Número de plano</label><input id="m_numero" value="${pl?pl.numero:''}" placeholder="Ej. 01">
-        ${!pl ? renderSugerencia(sugerirSiguiente(planosOfProject(nav.projectId),'numero'),'m_numero') : ''}
+        ${!pl ? renderSugerencia(sugerirSiguientePlano(escenaId),'m_numero') : ''}
       </div>
       <div class="field"><label>Interior / Exterior</label>
         <select id="m_intext"><option ${v('intExt')==='Interior'?'selected':''}>Interior</option><option ${v('intExt')==='Exterior'?'selected':''}>Exterior</option></select>
@@ -1123,7 +1269,7 @@ function openPlanoModal(escenaId, id){
 
     <div class="section-title">Foto de referencia (opcional)</div>
     <div id="fotoPreviewWrap" style="margin-bottom:10px;">
-      ${pl&&pl.imagen ? `<img id="fotoPreview" src="${pl.imagen}" style="max-width:140px; max-height:140px; border-radius:10px; border:1px solid var(--line); display:block;">` : `<div id="fotoPreview" style="font-size:12px;color:var(--muted)">Sin foto adjunta</div>`}
+      ${(pl && getPhoto(pl.id)) ? `<img id="fotoPreview" src="${getPhoto(pl.id)}" style="max-width:140px; max-height:140px; border-radius:10px; border:1px solid var(--line); display:block;">` : `<div id="fotoPreview" style="font-size:12px;color:var(--muted)">Sin foto adjunta</div>`}
     </div>
     <div class="row-actions">
       <button class="btn-secondary" onclick="document.getElementById('fotoCamaraInput').click()">📷 Cámara</button>
@@ -1137,7 +1283,7 @@ function openPlanoModal(escenaId, id){
       <button class="btn-secondary" onclick="closeModal()">Cancelar</button>
       <button class="btn-primary" onclick="savePlano()">Guardar</button>
     </div>`;
-  tempImagenPlano = pl && pl.imagen ? pl.imagen : null;
+  tempImagenPlano = pl ? getPhoto(pl.id) : null;
   const aspectCurrent = v('aspectRatio');
   tempAspectRatios = aspectCurrent ? aspectCurrent.split(',').map(s=>s.trim()).filter(Boolean) : [];
   renderAspectGrid();
@@ -1220,7 +1366,7 @@ function quitarFotoPlano(){
     if(wrap) wrap.innerHTML = `<div style="font-size:12px;color:var(--muted)">Sin foto adjunta</div>`;
   }, true);
 }
-function savePlano(){
+async function savePlano(){
   const numero = document.getElementById('m_numero').value.trim();
   if(!numero){ toast('⚠️ Ingresa el número de plano'); return; }
   const id = document.getElementById('m_id').value || uid('plano');
@@ -1231,13 +1377,27 @@ function savePlano(){
   const fpsVal = document.getElementById('m_fps').value;
   const shutterVal = document.getElementById('m_shutter').value;
   const resolucionVal = document.getElementById('m_resolucion').value;
-  // Aprender valores nuevos escritos manualmente ("Otro") para futuras veces
   learnCustomValue('diafragma', diafragmaVal);
   learnCustomValue('wb', wbVal);
   learnCustomValue('iso', isoVal);
   learnCustomValue('fps', fpsVal);
   learnCustomValue('shutter', shutterVal);
   learnCustomValue('resolucion', resolucionVal);
+  // Guardar foto en IndexedDB (no en localStorage — mantiene localStorage liviano)
+  let imagenFlag = null;
+  if(tempImagenPlano){
+    try{
+      await photoDB.put(id, tempImagenPlano);
+      photoCache.set(id, tempImagenPlano);
+      imagenFlag = 'idb';
+    }catch(e){
+      imagenFlag = tempImagenPlano; // fallback: localStorage
+      toast('⚠️ Almacenamiento extendido no disponible. Foto en modo básico.');
+    }
+  } else if(existing && (existing.imagen === 'idb' || (existing.imagen && existing.imagen.startsWith('data:')))){
+    // El usuario quitó la foto — borrar de IndexedDB
+    try{ await photoDB.delete(id); photoCache.delete(id); }catch(e){}
+  }
   const obj = { id, escenaId: document.getElementById('m_escenaId').value, numero,
     intExt: document.getElementById('m_intext').value,
     descripcion: document.getElementById('m_descripcion').value,
@@ -1252,7 +1412,7 @@ function savePlano(){
     aspectRatio: tempAspectRatios.join(', '),
     filtros: document.getElementById('m_filtros').value,
     observaciones: document.getElementById('m_observaciones').value,
-    imagen: tempImagenPlano,
+    imagen: imagenFlag,
     createdAt: existing?existing.createdAt:now(), updatedAt: now() };
   const idx = state.planos.findIndex(x=>x.id===id);
   if(idx>=0) state.planos[idx]=obj; else state.planos.push(obj);
@@ -1260,11 +1420,19 @@ function savePlano(){
   toast(existing? '✅ Plano actualizado correctamente' : '✅ Plano creado correctamente');
 }
 function deletePlano(id){
-  customConfirm('Esto eliminará el plano y sus clips. ¿Continuar?', ()=>{
+  customConfirm('Esto eliminará el plano y sus clips. ¿Continuar?', async ()=>{
+    const plano = state.planos.find(p=>p.id===id);
+    const clips = state.clips.filter(c=>c.planoId===id);
+    const foto = photoCache.get(id);
     state.clips = state.clips.filter(c=>c.planoId!==id);
     state.planos = state.planos.filter(p=>p.id!==id);
+    try{ await photoDB.delete(id); photoCache.delete(id); }catch(e){}
     save(); render();
-    toast('🗑️ Plano eliminado');
+    if(plano) showUndoToast('Plano eliminado', async ()=>{
+      state.planos.push(plano); state.clips.push(...clips);
+      if(foto){ photoCache.set(id,foto); await photoDB.put(id,foto).catch(()=>{}); }
+      save(); render(); toast('↩️ Plano restaurado');
+    });
   }, true);
 }
 
@@ -1278,6 +1446,30 @@ function badgeClassEstado(estado){
   return 'use';
 }
 function estadoEmoji(estado){ return estado==='Circle Take' ? '⭐ ' : ''; }
+function estadoPrioridad(estado){
+  const map = {
+    'Circle Take': { label:'Prioridad Máxima',  color:'#a8821f', bg:'rgba(212,175,55,.15)' },
+    'Use':         { label:'Prioridad Alta',     color:'#1f9d57', bg:'rgba(31,157,87,.12)'  },
+    'Alt Take':    { label:'Prioridad Media',    color:'#b8a514', bg:'rgba(184,165,20,.15)' },
+    'Hold':        { label:'Prioridad Baja',     color:'#e07a1f', bg:'rgba(224,122,31,.15)' },
+    'No Good':     { label:'Descartada',         color:'#d6453f', bg:'rgba(214,69,63,.12)'  },
+  };
+  return map[estado] || { label:'Prioridad Alta', color:'#1f9d57', bg:'rgba(31,157,87,.12)' };
+}
+function pdfBadge(estado){
+  const cls = badgeClassEstado(estado);
+  const pri = estadoPrioridad(estado);
+  const colorMap = {
+    circle:'background:#fff3cd;color:#a8821f;border:1px solid #d4af37;',
+    use:   'background:#d4edda;color:#1f9d57;border:1px solid #1f9d57;',
+    alt:   'background:#fff9c4;color:#b8a514;border:1px solid #b8a514;',
+    hold:  'background:#ffe5cc;color:#e07a1f;border:1px solid #e07a1f;',
+    nogood:'background:#f8d7da;color:#d6453f;border:1px solid #d6453f;',
+  };
+  const badgeStyle = `display:inline-block;padding:1px 8px;border-radius:999px;font-size:10px;font-weight:700;${colorMap[cls]||colorMap.use}`;
+  const prioStyle  = `font-size:10px;font-weight:700;color:${pri.color};margin-left:8px;`;
+  return `<span style="${badgeStyle}">${estadoEmoji(estado)}${estado||'-'}</span><span style="${prioStyle}">${pri.label}</span>`;
+}
 function renderPlano(){
   const pl = getPlano(nav.planoId);
   if(!pl) return `<main><div class="empty">Plano no encontrado</div></main>`;
@@ -1288,7 +1480,7 @@ function renderPlano(){
     </div>
     <div class="card">
       <div style="display:flex; gap:12px; align-items:flex-start;">
-        ${pl.imagen? `<img src="${pl.imagen}" onclick="abrirFotoCompleta('${pl.imagen}')" style="width:96px; height:56px; object-fit:cover; border-radius:10px; border:1px solid var(--line); flex-shrink:0; cursor:pointer;">` : ''}
+        ${getPhoto(pl.id)? `<img src="${getPhoto(pl.id)}" onclick="abrirFotoCompleta('${getPhoto(pl.id)}')" style="width:96px; height:56px; object-fit:cover; border-radius:10px; border:1px solid var(--line); flex-shrink:0; cursor:pointer;">` : ''}
         <div style="flex:1; min-width:0;">
           <h2>Plano ${pl.numero}</h2>
           <div class="meta" style="font-size:12px;color:var(--muted)">
@@ -1322,7 +1514,7 @@ function renderPlano(){
   <div class="fab"><button class="btn-primary" style="width:100%; padding:14px;" onclick="openClipModal('${pl.id}')">+ Nuevo clip</button></div>`;
 }
 
-const NOTAS_RAPIDAS = ['DIRECTOR APROBÓ','AGENCIA/CLIENTE APROBÓ','DIRECTOR, AGENCIA Y CLIENTE APROBÓ'];
+const NOTAS_RAPIDAS = ['DIRECTOR APROBÓ','AGENCIA/CLIENTE APROBÓ','DIRECTOR, AGENCIA Y CLIENTE APROBÓ','VERSIÓN 1','VERSIÓN 2'];
 let tempEstado = 'Use';
 function openClipModal(planoId, id){
   const c = id? state.clips.find(x=>x.id===id): null;
@@ -1424,11 +1616,30 @@ function saveClip(){
   save(); closeModal(); render();
   toast(existing? '✅ Clip actualizado correctamente' : '✅ Clip creado correctamente');
 }
+// ── SISTEMA DE UNDO ──────────────────────────────────────────────────────────
+function showUndoToast(mensaje, restoreFn){
+  document.getElementById('undoToast')?.remove();
+  clearTimeout(window._undoTimer);
+  const div = document.createElement('div');
+  div.id = 'undoToast';
+  div.style.cssText = 'position:fixed;bottom:82px;left:50%;transform:translateX(-50%);background:#11142b;color:#fff;padding:10px 16px;border-radius:14px;z-index:9999;display:flex;align-items:center;gap:12px;font-size:13px;box-shadow:0 4px 20px rgba(0,0,0,.35);white-space:nowrap;';
+  div.innerHTML = `<span>${mensaje}</span><button onclick="doUndo()" style="background:#0540ed;color:#fff;border:none;border-radius:8px;padding:5px 12px;font-size:12px;cursor:pointer;font-weight:700;">↩ Deshacer</button>`;
+  document.body.appendChild(div);
+  window._undoRestore = restoreFn;
+  window._undoTimer = setTimeout(()=>{ div.remove(); window._undoRestore=null; }, 10000);
+}
+async function doUndo(){
+  document.getElementById('undoToast')?.remove();
+  clearTimeout(window._undoTimer);
+  if(window._undoRestore){ await window._undoRestore(); window._undoRestore=null; }
+}
+// ─────────────────────────────────────────────────────────────────────────────
 function deleteClip(id){
   customConfirm('¿Eliminar este clip?', ()=>{
+    const clip = state.clips.find(c=>c.id===id);
     state.clips = state.clips.filter(c=>c.id!==id);
     save(); render();
-    toast('🗑️ Clip eliminado');
+    if(clip) showUndoToast('Clip eliminado', ()=>{ state.clips.push(clip); save(); render(); toast('↩️ Clip restaurado'); });
   }, true);
 }
 
@@ -1456,13 +1667,131 @@ function closeModal(){
 }
 
 // ---------- REPORTES ----------
-// ---------- RESUMEN VISUAL ----------
+// ── MOVER ESCENA ─────────────────────────────────────────────────────────────
+function openMoverEscenaModal(escenaId){
+  const esc = getEscena(escenaId);
+  const rollActual = getRoll(esc.rollId);
+  const proyecto = rollActual ? getProject(rollActual.projectId) : null;
+  if(!proyecto) return;
+  const otrosRolls = rollsOf(proyecto.id).filter(r=>r.id !== rollActual.id);
+  document.getElementById('modalContent').innerHTML = `
+    <span class="close-x" onclick="closeModal()">✕</span>
+    <h2>Mover escena</h2>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:14px;">Escena: <b>${esc.nombre}</b>${esc.locacion?' · '+esc.locacion:''}<br>Actualmente en: <b>${rollActual.nombre}</b></p>
+    <div class="section-title">Mover a roll existente</div>
+    <div style="max-height:180px;overflow-y:auto;border:1px solid var(--line);border-radius:10px;margin-bottom:14px;">
+      ${otrosRolls.length ? otrosRolls.map(r=>`
+        <div onclick="moverEscenaARoll('${escenaId}','${r.id}')" style="padding:12px 14px;cursor:pointer;border-bottom:1px solid var(--line);font-size:13px;font-weight:600;">
+          📼 ${r.nombre}
+        </div>`).join('') : '<div style="padding:12px;font-size:12px;color:var(--muted);">No hay otros rolls en este proyecto.</div>'}
+    </div>
+    <div class="section-title">Crear nuevo roll y mover ahí</div>
+    <div class="field">
+      <label>Nombre del nuevo roll</label>
+      <input id="mv_rollNombre" placeholder="Ej. A_002">
+    </div>
+    <div class="row-actions">
+      <button class="btn-secondary" onclick="closeModal()">Cancelar</button>
+      <button class="btn-primary" onclick="moverEscenaANuevoRoll('${escenaId}','${proyecto.id}')">Crear y mover</button>
+    </div>`;
+  openModal();
+}
+function moverEscenaARoll(escenaId, targetRollId){
+  const esc = getEscena(escenaId);
+  const rollDestino = getRoll(targetRollId);
+  customConfirm(`¿Mover la escena "${esc.nombre}" al roll "${rollDestino.nombre}"? Los planos y clips van con ella.`, ()=>{
+    const idx = state.escenas.findIndex(e=>e.id===escenaId);
+    if(idx>=0) state.escenas[idx].rollId = targetRollId;
+    save(); closeModal(); render();
+    toast(`✅ Escena movida a ${rollDestino.nombre}`);
+  }, true);
+}
+function moverEscenaANuevoRoll(escenaId, projectId){
+  const nombre = document.getElementById('mv_rollNombre').value.trim();
+  if(!nombre){ toast('⚠️ Escribe el nombre del nuevo roll'); return; }
+  const esc = getEscena(escenaId);
+  customConfirm(`¿Crear roll "${nombre}" y mover la escena "${esc.nombre}" ahí?`, ()=>{
+    const nuevoRoll = { id: uid('roll'), projectId, nombre, createdAt: now(), updatedAt: now() };
+    state.rolls.push(nuevoRoll);
+    const idx = state.escenas.findIndex(e=>e.id===escenaId);
+    if(idx>=0) state.escenas[idx].rollId = nuevoRoll.id;
+    save(); closeModal(); render();
+    toast(`✅ Roll "${nombre}" creado y escena movida`);
+  }, true);
+}
+// ── MOVER PLANO ──────────────────────────────────────────────────────────────
+function openMoverPlanoModal(planoId){
+  const pl = getPlano(planoId);
+  const escActual = getEscena(pl.escenaId);
+  const rollActual = getRoll(escActual.rollId);
+  const proyecto = getProject(rollActual.projectId);
+  // Todas las escenas del proyecto excepto la actual, agrupadas por roll
+  const todasEscenas = rollsOf(proyecto.id).flatMap(r=>
+    escenasOf(r.id).filter(e=>e.id!==pl.escenaId).map(e=>({...e, rollNombre:r.nombre, rollId:r.id}))
+  );
+  document.getElementById('modalContent').innerHTML = `
+    <span class="close-x" onclick="closeModal()">✕</span>
+    <h2>Mover plano</h2>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:14px;">Plano: <b>${pl.numero}</b>${pl.descripcion?' — '+pl.descripcion:''}<br>Actualmente en: <b>${rollActual.nombre} › ${escActual.nombre}</b></p>
+    <div class="section-title">Mover a escena existente</div>
+    <div style="max-height:200px;overflow-y:auto;border:1px solid var(--line);border-radius:10px;margin-bottom:14px;">
+      ${todasEscenas.length ? todasEscenas.map(e=>`
+        <div onclick="moverPlanoAEscena('${planoId}','${e.id}')" style="padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--line);">
+          <div style="font-size:10px;color:var(--muted);">📼 ${e.rollNombre}</div>
+          <div style="font-size:13px;font-weight:600;">📌 ${e.nombre}${e.locacion?' · '+e.locacion:''}</div>
+        </div>`).join('') : '<div style="padding:12px;font-size:12px;color:var(--muted);">No hay otras escenas en este proyecto.</div>'}
+    </div>
+    <div class="section-title">Mover a nuevo roll (con esta misma escena)</div>
+    <p style="font-size:11px;color:var(--muted);margin-bottom:8px;">Se creará el nuevo roll y dentro una escena "<b>${escActual.nombre}</b>" que contendrá solo este plano.</p>
+    <div class="field">
+      <label>Nombre del nuevo roll</label>
+      <input id="mv_rollNombrePl" placeholder="Ej. A_002">
+    </div>
+    <div class="row-actions">
+      <button class="btn-secondary" onclick="closeModal()">Cancelar</button>
+      <button class="btn-primary" onclick="moverPlanoANuevoRoll('${planoId}','${escActual.id}','${proyecto.id}')">Crear roll y mover</button>
+    </div>`;
+  openModal();
+}
+function moverPlanoAEscena(planoId, targetEscenaId){
+  const pl = getPlano(planoId);
+  const destino = getEscena(targetEscenaId);
+  const rollDestino = getRoll(destino.rollId);
+  customConfirm(`¿Mover el plano ${pl.numero} a "${destino.nombre}" (${rollDestino.nombre})? Sus clips van con él.`, ()=>{
+    const idx = state.planos.findIndex(p=>p.id===planoId);
+    if(idx>=0) state.planos[idx].escenaId = targetEscenaId;
+    save(); closeModal(); render();
+    toast(`✅ Plano ${pl.numero} movido a ${rollDestino.nombre} › ${destino.nombre}`);
+  }, true);
+}
+function moverPlanoANuevoRoll(planoId, escenaOrigenId, projectId){
+  const nombre = document.getElementById('mv_rollNombrePl').value.trim();
+  if(!nombre){ toast('⚠️ Escribe el nombre del nuevo roll'); return; }
+  const pl = getPlano(planoId);
+  const escOrigen = getEscena(escenaOrigenId);
+  customConfirm(`¿Crear roll "${nombre}" con la escena "${escOrigen.nombre}" y mover el plano ${pl.numero} ahí?`, ()=>{
+    // Crear nuevo roll
+    const nuevoRoll = { id: uid('roll'), projectId, nombre, createdAt: now(), updatedAt: now() };
+    state.rolls.push(nuevoRoll);
+    // Crear nueva escena con los mismos datos que la original
+    const nuevaEscena = { id: uid('escena'), rollId: nuevoRoll.id,
+      nombre: escOrigen.nombre, descripcion: escOrigen.descripcion,
+      locacion: escOrigen.locacion, createdAt: now(), updatedAt: now() };
+    state.escenas.push(nuevaEscena);
+    // Mover plano a la nueva escena
+    const idx = state.planos.findIndex(p=>p.id===planoId);
+    if(idx>=0) state.planos[idx].escenaId = nuevaEscena.id;
+    save(); closeModal(); render();
+    toast(`✅ Roll "${nombre}" creado y plano ${pl.numero} movido ahí`);
+  }, true);
+}
+// ─────────────────────────────────────────────────────────────────────────────
 function chipEstado(c){
   const cls = badgeClassEstado(c.estado);
   const styleMap = {
     circle:'background:rgba(212,175,55,.2);color:#a8821f;',
     use:'background:rgba(47,184,106,.2);color:#1f9d57;',
-    alt:'background:rgba(224,201,60,.2);color:#b8a514;',
+    alt:'background:rgba(13,148,136,.18);color:#0d9488;',
     hold:'background:rgba(255,140,47,.2);color:#e07a1f;',
     nogood:'background:rgba(229,84,79,.2);color:#d6453f;'
   };
@@ -1478,16 +1807,19 @@ function renderResumen(){
     const esc = getEscena(pl.escenaId);
     const roll = esc? getRoll(esc.rollId) : null;
     const clips = clipsOf(pl.id).sort((a,b)=>(a.createdAt||0)-(b.createdAt||0));
-    const fotoHtml = pl.imagen
-      ? `<img class="resumen-foto" src="${pl.imagen}" onclick="abrirFotoCompleta('${pl.imagen}')" title="Toca para ampliar">`
+    const _rfSrc = getPhoto(pl.id);
+    const fotoHtml = _rfSrc
+      ? `<img class="resumen-foto" src="${_rfSrc}" onclick="abrirFotoCompleta('${_rfSrc}')" title="Toca para ampliar">`
       : `<div class="resumen-foto-placeholder">Sin foto</div>`;
     const clipsHtml = clips.length
       ? `<div class="resumen-clips">${clips.map(c=>chipEstado(c)).join('')}</div>`
       : `<div style="font-size:11px;color:var(--muted);margin-top:6px;">Sin clips registrados</div>`;
     const navIds = roll && esc ? `{projectId:'${p.id}',rollId:'${roll.id}',escenaId:'${esc.id}',planoId:'${pl.id}'}` : null;
+    const escTitulo = esc ? esc.nombre : '';
+    const escDetalle = esc ? (esc.locacion || esc.descripcion || '') : '';
     return `<div class="resumen-plano">
       <h3 ${navIds? `onclick="goDirect('plano',${navIds})" style="cursor:pointer;"`:''} title="${navIds?'Toca para ver el detalle del plano':''}">
-        Plano ${pl.numero}${pl.descripcion? ' — '+pl.descripcion:''} ${navIds? '<span style="font-size:11px;opacity:.5;font-weight:400">→</span>':''}
+        Plano ${pl.numero}${escTitulo? ' — '+escTitulo:''}${escDetalle? ' · '+escDetalle:''} ${navIds? '<span style="font-size:11px;opacity:.5;font-weight:400">→</span>':''}
       </h3>
       <div class="resumen-body">
         ${fotoHtml}
@@ -1549,7 +1881,7 @@ function exportProjectPDF(projectId){
   const legendHtml = `<div class="ppriority"><b>PRIORIDAD PARA EDICIÓN:</b>
     <span style="color:#a8821f;">⭐ Circle Take: Máxima</span> |
     <span style="color:#1f9d57;">Use: Alta</span> |
-    <span style="color:#b8a514;">Alt Take: Media</span> |
+    <span style="color:#0d9488;">Alt Take: Media</span> |
     <span style="color:#e07a1f;">Hold: Baja</span> |
     <span style="color:#d6453f;">No Good: Descartada</span>.</div>`;
   let html = `<div class="pheader">
@@ -1577,7 +1909,7 @@ function exportProjectPDF(projectId){
       </div>`;
       planosOf(e.id).forEach(pl=>{
         html += `<div class="pplano" style="display:flex; gap:8px; align-items:flex-start;">
-          ${pl.imagen? `<img src="${pl.imagen}" style="width:160px; height:90px; object-fit:cover; border-radius:6px; border:1px solid #999; flex-shrink:0;">` : ''}
+          ${getPhoto(pl.id)? `<img src="${getPhoto(pl.id)}" style="width:160px; height:90px; object-fit:cover; border-radius:6px; border:1px solid #999; flex-shrink:0;">` : ''}
           <div>
             <div class="pplano-title">▸ Plano ${pl.numero} — ${pl.intExt||'-'}, ${pl.diaNoche||'-'}</div>
             ${pl.descripcion? `<div class="pplano-desc">${pl.descripcion}</div>`:''}
@@ -1589,7 +1921,7 @@ function exportProjectPDF(projectId){
         clipsOf(pl.id).forEach(c=>{
           totalClips++;
           html += `<div class="pclip">
-            <h4>Clip ${c.numero||''} ${c.tomas? '— Toma(s): '+c.tomas:''} <span class="badge ${badgeClassEstado(c.estado)}" style="display:inline-block;vertical-align:middle;padding:1px 7px;border-radius:8px;font-size:9px;margin-left:6px;">${estadoEmoji(c.estado)}${c.estado||'-'}</span></h4>
+            <h4>Clip ${c.numero||''} ${c.tomas? '— Toma(s): '+c.tomas+' ':''} ${pdfBadge(c.estado)}</h4>
             <div class="meta">
               Duración: ${c.duracion||'-'} ${c.tags&&c.tags.length? '| Tags: '+c.tags.join(', '):''}
               ${c.notas? '<br>Notas: '+c.notas:''}
@@ -1625,7 +1957,7 @@ load();
 if(state.theme==='dark') document.documentElement.classList.add('dark');
 nav.view = 'lock';
 pinStage = state.pin ? 'enter' : 'setNew';
-render();
+loadPhotos().then(()=>render()).catch(()=>render());
 
 if('serviceWorker' in navigator){
   window.addEventListener('load', ()=>{
